@@ -1,5 +1,6 @@
 """Micro (détection locale du mot de réveil avec Vosk) et voix (pyttsx3).
-Le son n'est jamais enregistré sur disque ni envoyé sur Internet."""
+Le son n'est jamais enregistré sur disque ni envoyé sur Internet.
+"""
 import json
 import queue
 import re
@@ -32,10 +33,10 @@ class TTS:
         try:
             import pyttsx3
             engine = pyttsx3.init()
-            for v in engine.getProperty("voices"):
-                blob = (v.id + " " + str(getattr(v, "name", ""))).lower()
+            for voice in engine.getProperty("voices"):
+                blob = (voice.id + " " + str(getattr(voice, "name", ""))).lower()
                 if "fr" in blob or "hortense" in blob or "french" in blob or "julie" in blob:
-                    engine.setProperty("voice", v.id)
+                    engine.setProperty("voice", voice.id)
                     break
             engine.setProperty("rate", 185)
         except Exception:
@@ -59,7 +60,7 @@ class TTS:
 
 
 class Voice:
-    """Écoute en continu tant qu'elle est activée. start()/stop() ouvrent/ferment réellement le micro."""
+    """Écoute tant qu'elle est activée ; le micro reste ouvert entre les commandes."""
 
     def __init__(self, model_path, on_command, on_confirm_answer, is_busy, confirm_pending, on_state, on_error):
         self.model_path = str(model_path)
@@ -82,11 +83,28 @@ class Voice:
         return self.running
 
     def pause(self, value: bool):
+        """Met en pause la lecture du micro pendant la réponse vocale."""
         self.paused = value
         if value:
             self._drain()
 
+    def resume_listening(self):
+        """Reprend l'écoute après TTS en mode mot de réveil, sans réactiver un micro coupé."""
+        if not self.running:
+            return False
+        # Écarte les derniers buffers capturés pendant la synthèse afin que Polaris
+        # ne prenne pas sa propre voix pour une commande utilisateur.
+        self.paused = True
+        self._drain()
+        self.command_until = 0.0
+        self.paused = False
+        self.on_state("wake")
+        return True
+
     def open_followup(self, seconds: float = 6.0):
+        """Fenêtre courte permettant une commande suivante sans répéter le mot de réveil."""
+        if not self.running:
+            return
         self.command_until = time.time() + seconds
         self.on_state("command")
 
@@ -106,9 +124,9 @@ class Voice:
             SetLogLevel(-1)
             if self.model is None:
                 self.model = Model(self.model_path)
-            rec = KaldiRecognizer(self.model, 16000)
+            recognizer = KaldiRecognizer(self.model, 16000)
 
-            def cb(indata, frames, t, status):
+            def callback(indata, frames, timing, status):
                 if not self.paused:
                     try:
                         self.audio.put_nowait(bytes(indata))
@@ -116,33 +134,36 @@ class Voice:
                         pass
 
             self.stream = sd.RawInputStream(samplerate=16000, blocksize=8000 if eco else 4000,
-                                            dtype="int16", channels=1, callback=cb)
+                                            dtype="int16", channels=1, callback=callback)
             self.stream.start()
-        except Exception as e:
-            self.on_error(f"Micro ou modèle vocal indisponible : {e}")
+        except Exception as exc:
+            self.on_error(f"Micro ou modèle vocal indisponible : {exc}")
             self.stop()
             return
         self.running = True
+        self.paused = False
         self.command_until = 0.0
         self.on_state("wake")
-        self.thread = threading.Thread(target=self._loop, args=(rec,), daemon=True)
+        self.thread = threading.Thread(target=self._loop, args=(recognizer,), daemon=True)
         self.thread.start()
 
     def stop(self):
         """Coupe immédiatement le micro et libère la ressource."""
         self.running = False
+        self.paused = True
         self.command_until = 0.0
-        s, self.stream = self.stream, None
-        if s is not None:
+        stream, self.stream = self.stream, None
+        if stream is not None:
             try:
-                s.abort()
-                s.close()
+                stream.abort()
+                stream.close()
             except Exception:
                 pass
         self._drain()
+        self.paused = False
         self.on_state("off")
 
-    def _loop(self, rec):
+    def _loop(self, recognizer):
         while self.running:
             try:
                 data = self.audio.get(timeout=0.3)
@@ -151,28 +172,36 @@ class Voice:
                     self.command_until = 0.0
                     self.on_state("wake")
                 continue
-            if rec.AcceptWaveform(data):
-                text = json.loads(rec.Result()).get("text", "")
-                if text.strip():
-                    self._utterance(norm(text))
+            if self.paused:
+                continue
+            try:
+                if recognizer.AcceptWaveform(data):
+                    text = json.loads(recognizer.Result()).get("text", "")
+                    if text.strip():
+                        self._utterance(norm(text))
+            except Exception as exc:
+                self.on_error(f"Erreur de reconnaissance vocale : {exc}")
+                time.sleep(0.1)
 
-    def _utterance(self, t: str):
+    def _utterance(self, text: str):
+        if not text:
+            return
         if self.confirm_pending():
-            words = t.split()
-            if any(w in NO for w in words):
+            words = text.split()
+            if any(word in NO for word in words):
                 self.on_confirm_answer(False)
-            elif any(w in YES for w in words):
+            elif any(word in YES for word in words):
                 self.on_confirm_answer(True)
             return
         if self.is_busy():
             return
         in_command = time.time() < self.command_until
-        command = t
+        command = text
         if not in_command:
-            hits = [t.index(v) + len(v) for v in WAKE_VARIANTS if v in t]
+            hits = [text.index(variant) + len(variant) for variant in WAKE_VARIANTS if variant in text]
             if not hits:
                 return
-            command = t[min(hits):].strip()
+            command = text[min(hits):].strip()
             if len(command) < 3:
                 self.open_followup(9.0)
                 return

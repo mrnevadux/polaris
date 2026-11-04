@@ -64,11 +64,9 @@ class PolarisApp(ctk.CTk):
         if not config.get_api_key():
             self.after(700, self.open_settings)
 
-    # ---------- construction ----------
     def _build(self):
         shell = ctk.CTkFrame(self, fg_color="transparent")
         shell.pack(fill="both", expand=True, padx=20, pady=18)
-
         header = ctk.CTkFrame(shell, fg_color=PANEL, corner_radius=18, border_width=1, border_color="#1C2A40")
         header.pack(fill="x", pady=(0, 12))
         identity = ctk.CTkFrame(header, fg_color="transparent")
@@ -101,10 +99,10 @@ class PolarisApp(ctk.CTk):
         self.chat = ctk.CTkTextbox(chat_card, fg_color=PANEL, wrap="word", font=("Segoe UI", 14),
                                    border_width=0, corner_radius=12, scrollbar_button_color="#253650")
         self.chat.pack(fill="both", expand=True, padx=10, pady=(3, 10))
-        tb = self.chat._textbox
-        tb.tag_config("user", foreground="#8EDCFF", font=("Segoe UI", 13, "bold"))
-        tb.tag_config("bot", foreground=WHITE)
-        tb.tag_config("act", foreground="#8FA6C2", font=("Consolas", 10))
+        textbox = self.chat._textbox
+        textbox.tag_config("user", foreground="#8EDCFF", font=("Segoe UI", 13, "bold"))
+        textbox.tag_config("bot", foreground=WHITE)
+        textbox.tag_config("act", foreground="#8FA6C2", font=("Consolas", 10))
         self.chat.configure(state="disabled")
         self.append("act", "SYSTÈME PRÊT  ·  « Hey Polaris, ouvre le Bloc-notes »  ·  ou écris une commande ci-dessous.")
 
@@ -126,7 +124,6 @@ class PolarisApp(ctk.CTk):
         self.set_gemini(bool(config.get_api_key()), "clé enregistrée" if config.get_api_key() else "clé manquante")
         self.refresh_status()
 
-    # ---------- utilitaires UI ----------
     def post(self, kind, payload):
         self.ui_q.put((kind, payload))
 
@@ -214,7 +211,6 @@ class PolarisApp(ctk.CTk):
             pass
         self.after(5000 if config.get("eco", False) else 2000, self.update_resources)
 
-    # ---------- micro ----------
     def toggle_mic(self):
         if self.voice.active:
             self.voice.stop()
@@ -225,7 +221,6 @@ class PolarisApp(ctk.CTk):
         self.post("action", "Chargement du micro et du modèle vocal…")
         threading.Thread(target=lambda: self.voice.start(config.get("eco", False)), daemon=True).start()
 
-    # ---------- commandes ----------
     def send_text(self):
         text = self.entry.get().strip()
         if text:
@@ -252,13 +247,13 @@ class PolarisApp(ctk.CTk):
                 self.voice.pause(True)
             self.tts.speak(reply)
         finally:
+            # Le micro reste activé seulement si l'utilisateur l'avait activé. Après
+            # la réponse, on retourne directement à l'écoute du mot de réveil.
             if self.voice.active:
-                self.voice.pause(False)
-                self.voice.open_followup()
+                self.voice.resume_listening()
             self.post("activity", "idle")
             self.busy_lock.release()
 
-    # ---------- confirmations ----------
     def ask_confirm(self, question: str) -> bool:
         confirmation = Confirmation(question)
         self.pending = confirmation
@@ -267,7 +262,7 @@ class PolarisApp(ctk.CTk):
             self.voice.pause(True)
         self.tts.speak(question)
         if self.voice.active:
-            self.voice.pause(False)
+            self.voice.resume_listening()
         confirmation.event.wait(30)
         result = confirmation.result if confirmation.event.is_set() else False
         self.pending = None
@@ -305,7 +300,6 @@ class PolarisApp(ctk.CTk):
                 pass
             self.dialog = None
 
-    # ---------- réglages ----------
     def open_settings(self):
         if self.settings_window is not None:
             try:
@@ -354,7 +348,7 @@ class PolarisApp(ctk.CTk):
         def save_settings():
             new_key = key_entry.get().strip()
             model_value = model_entry.get().strip() or config.DEFAULT_MODEL
-            if not model_value or any(char.isspace() for char in model_value):
+            if any(char.isspace() for char in model_value):
                 result.configure(text="Le nom du modèle ne doit pas contenir d'espaces.")
                 return
             try:
@@ -376,6 +370,7 @@ class PolarisApp(ctk.CTk):
         actions.pack(fill="x", padx=20, pady=(12, 8))
         ctk.CTkButton(actions, text="ENREGISTRER", height=40, corner_radius=10,
                       fg_color=BLUE, hover_color="#285FD0", command=save_settings).pack(side="left")
+
         def open_data_folder():
             try:
                 if hasattr(os, "startfile"):
@@ -384,9 +379,9 @@ class PolarisApp(ctk.CTk):
                     result.configure(text=f"Dossier des données : {config.DATA}", text_color=DIM)
             except OSError as exc:
                 result.configure(text=f"Impossible d'ouvrir le dossier : {exc}", text_color=RED)
+
         ctk.CTkButton(actions, text="OUVRIR LE DOSSIER DATA", height=40, corner_radius=10,
                       fg_color=PANEL_LIGHT, hover_color="#1C2D45", command=open_data_folder).pack(side="left", padx=(9, 0))
-
         ctk.CTkLabel(card, text="Clé chiffrée avec Windows DPAPI. Micro activé uniquement sur demande.\n"
                      "Si le dossier de l'exe est protégé, les données sont placées dans AppData.",
                      text_color=DIM, justify="left", wraplength=470, font=("Segoe UI", 10)).pack(anchor="w", padx=20, pady=(7, 18))
