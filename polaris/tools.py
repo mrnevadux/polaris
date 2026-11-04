@@ -1,32 +1,51 @@
-"""Liste FERMÉE des actions que Gemini peut déclencher.
-Pas de shell, pas de commande libre, pas de suppression de fichier."""
+"""Liste FERMÉE des actions contrôlées par Gemini.
+
+Le but n'est pas de donner un shell libre : nous exposons uniquement des outils
+précis, autorisés et vérifiables. Les actions grasses comme le clavier/souris
+peuvent demander une confirmation explicite avant exécution.
+"""
 import ctypes
 import os
 import shutil
 import subprocess
 import unicodedata
 import webbrowser
-from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote_plus
 
 from . import config
 
+try:
+    import pyautogui
+except Exception:  # pragma: no cover - dépendance Windows uniquement
+    pyautogui = None
+
 HOME = Path.home()
 DEFAULT_FOLDERS = {
-    "desktop": HOME / "Desktop", "bureau": HOME / "Desktop",
+    "desktop": HOME / "Desktop",
+    "bureau": HOME / "Desktop",
     "documents": HOME / "Documents",
-    "downloads": HOME / "Downloads", "telechargements": HOME / "Downloads",
-    "images": HOME / "Pictures", "photos": HOME / "Pictures",
-    "musique": HOME / "Music", "videos": HOME / "Videos",
+    "downloads": HOME / "Downloads",
+    "telechargements": HOME / "Downloads",
+    "images": HOME / "Pictures",
+    "photos": HOME / "Pictures",
+    "musique": HOME / "Music",
+    "videos": HOME / "Videos",
 }
-TEXT_EXT = {".txt", ".md", ".csv", ".json", ".xml", ".html", ".py", ".js", ".ts", ".java", ".c", ".cpp",
-            ".h", ".log", ".ini", ".yml", ".yaml", ".sql", ".css", ".kt", ".bat"}
+TEXT_EXT = {
+    ".txt", ".md", ".csv", ".json", ".xml", ".html", ".py", ".js", ".ts", ".java", ".c",
+    ".cpp", ".h", ".log", ".ini", ".yml", ".yaml", ".sql", ".css", ".kt", ".bat"
+}
 BUILTIN_APPS = {
-    "bloc notes": "notepad.exe", "notepad": "notepad.exe", "calculatrice": "calc.exe",
-    "explorateur": "explorer.exe", "explorateur de fichiers": "explorer.exe",
-    "parametres": "ms-settings:", "gestionnaire des taches": "taskmgr.exe", "paint": "mspaint.exe",
+    "bloc notes": "notepad.exe",
+    "notepad": "notepad.exe",
+    "calculatrice": "calc.exe",
+    "explorateur": "explorer.exe",
+    "explorateur de fichiers": "explorer.exe",
+    "parametres": "ms-settings:",
+    "gestionnaire des taches": "taskmgr.exe",
+    "paint": "mspaint.exe",
     "outil capture": "snippingtool.exe",
 }
 
@@ -55,9 +74,7 @@ def _check_path(path: str) -> Path | None:
     return None
 
 
-# ---------------- Déclarations pour Gemini ----------------
 def _fn(fname, desc, /, **params):
-    """params: nom=(type, description, requis)"""
     d = {"name": fname, "description": desc}
     if params:
         d["parameters"] = {
@@ -89,24 +106,65 @@ DECLARATIONS = [
     _fn("move_file", "Déplace un fichier dans un dossier autorisé (confirmation demandée, n'écrase jamais).",
         path=("string", "Chemin complet", True), folder=("string", "desktop, documents, downloads, images, musique ou videos", True)),
     _fn("get_time", "Donne la date et l'heure actuelles."),
+    _fn("mouse_move", "Déplace la souris vers une position absolue en pixels.",
+        x=("integer", "Coordonnée X", True), y=("integer", "Coordonnée Y", True), duration=("number", "Durée de l'animation en secondes", False)),
+    _fn("mouse_click", "Clique sur la position actuelle ou sur une coordonnée donnée.",
+        x=("integer", "Coordonnée X", False), y=("integer", "Coordonnée Y", False), button=("string", "left, right ou middle", False)),
+    _fn("mouse_double_click", "Double-clic sur la position actuelle ou sur une coordonnée donnée.",
+        x=("integer", "Coordonnée X", False), y=("integer", "Coordonnée Y", False)),
+    _fn("mouse_scroll", "Fait défiler la page active.", amount=("integer", "Nombre de pas de scroll", True)),
+    _fn("keyboard_write", "Écrit du texte dans l'application active.", text=("string", "Texte à taper", True)),
+    _fn("keyboard_hotkey", "Envoie une combinaison de touches.", keys=("string", "Exemple: ctrl,alt,t ou ctrl,shift,esc", True)),
+    _fn("get_screen_size", "Renvoie la résolution de l'écran."),
+    _fn("capture_screen", "Prend une capture d'écran et la sauve dans le dossier Downloads.",
+        name=("string", "Nom du fichier sans extension", False)),
+    _fn("list_devices", "Tente de détecter les périphériques et clients réseau compatibles présents sur le PC ou le réseau local."),
 ]
 
 
-# ---------------- Exécution ----------------
 def execute(name: str, a: dict, confirm) -> str:
     """confirm(question) -> bool, bloquant, demande oui/non à l'utilisateur."""
     try:
-        if name == "open_app": return open_app(a["name"])
-        if name == "list_windows": return list_windows()
-        if name == "window_action": return window_action(a["title"], a["action"], confirm)
-        if name == "open_url": return open_url(a["url"])
-        if name == "web_search": return open_url("https://www.google.com/search?q=" + quote_plus(a["query"]))
-        if name == "find_files": return find_files(a.get("query", ""), a.get("extension", ""), a.get("folder", ""), a.get("content", ""))
-        if name == "open_file": return open_file(a["path"])
-        if name == "read_file": return read_file(a["path"])
-        if name == "rename_file": return rename_file(a["path"], a["new_name"], confirm)
-        if name == "move_file": return move_file(a["path"], a["folder"], confirm)
-        if name == "get_time": return datetime.now().strftime("%A %d %B %Y, %H:%M")
+        if name == "open_app":
+            return open_app(a["name"])
+        if name == "list_windows":
+            return list_windows()
+        if name == "window_action":
+            return window_action(a["title"], a["action"], confirm)
+        if name == "open_url":
+            return open_url(a["url"])
+        if name == "web_search":
+            return open_url("https://www.google.com/search?q=" + quote_plus(a["query"]))
+        if name == "find_files":
+            return find_files(a.get("query", ""), a.get("extension", ""), a.get("folder", ""), a.get("content", ""))
+        if name == "open_file":
+            return open_file(a["path"])
+        if name == "read_file":
+            return read_file(a["path"])
+        if name == "rename_file":
+            return rename_file(a["path"], a["new_name"], confirm)
+        if name == "move_file":
+            return move_file(a["path"], a["folder"], confirm)
+        if name == "get_time":
+            return datetime.now().strftime("%A %d %B %Y, %H:%M")
+        if name == "mouse_move":
+            return mouse_move(int(a["x"]), int(a["y"]), float(a.get("duration", 0.2)))
+        if name == "mouse_click":
+            return mouse_click(a.get("x"), a.get("y"), a.get("button", "left"), confirm)
+        if name == "mouse_double_click":
+            return mouse_double_click(a.get("x"), a.get("y"), confirm)
+        if name == "mouse_scroll":
+            return mouse_scroll(int(a["amount"]))
+        if name == "keyboard_write":
+            return keyboard_write(a["text"], confirm)
+        if name == "keyboard_hotkey":
+            return keyboard_hotkey(a["keys"], confirm)
+        if name == "get_screen_size":
+            return get_screen_size()
+        if name == "capture_screen":
+            return capture_screen(a.get("name", "polaris_capture"), confirm)
+        if name == "list_devices":
+            return list_devices()
         return f"Outil inconnu : {name} (refusé)."
     except KeyError as e:
         return f"Paramètre manquant : {e}"
@@ -118,10 +176,15 @@ def open_app(wanted: str) -> str:
     q = norm(wanted)
     if q in BUILTIN_APPS:
         target = BUILTIN_APPS[q]
-        os.startfile(target) if target.endswith(":") else subprocess.Popen([target])
+        if target.endswith(":"):
+            os.startfile(target)
+        else:
+            subprocess.Popen([target])
         return f"« {wanted} » lancé."
-    roots = [Path(os.environ.get("ProgramData", "")) / "Microsoft/Windows/Start Menu/Programs",
-             Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs"]
+    roots = [
+        Path(os.environ.get("ProgramData", "")) / "Microsoft/Windows/Start Menu/Programs",
+        Path(os.environ.get("APPDATA", "")) / "Microsoft/Windows/Start Menu/Programs",
+    ]
     best, best_score = None, 0
     for r in roots:
         if not r.exists():
@@ -143,20 +206,105 @@ def open_url(raw: str) -> str:
     return f"Navigateur ouvert sur {url}."
 
 
+# --- souris / clavier / écran ---
+def _require_pyautogui():
+    if pyautogui is None:
+        raise RuntimeError("Le module pyautogui n'est pas installé. Ajoute-le dans requirements.txt.")
+    return pyautogui
+
+
+def mouse_move(x: int, y: int, duration: float = 0.2) -> str:
+    pg = _require_pyautogui()
+    pg.moveTo(x, y, duration=max(0.0, float(duration)))
+    return f"Souris déplacée vers ({x}, {y})."
+
+
+def mouse_click(x: int | None, y: int | None, button: str = "left", confirm=None) -> str:
+    if x is not None and y is not None:
+        if confirm is not None and not confirm(f"Cliquer à ({x}, {y}) avec le bouton {button} ?"):
+            return "Refusé par l'utilisateur."
+        pg = _require_pyautogui(); pg.click(x=x, y=y, button=button)
+        return f"Clic {button} envoyé à ({x}, {y})."
+    if confirm is not None and not confirm(f"Cliquer avec le bouton {button} sur la position actuelle ?"):
+        return "Refusé par l'utilisateur."
+    pg = _require_pyautogui(); pg.click(button=button)
+    return f"Clic {button} sur la position actuelle."
+
+
+def mouse_double_click(x: int | None, y: int | None, confirm=None) -> str:
+    if x is not None and y is not None:
+        if confirm is not None and not confirm(f"Double-clic à ({x}, {y}) ?"):
+            return "Refusé par l'utilisateur."
+        pg = _require_pyautogui(); pg.doubleClick(x=x, y=y)
+        return f"Double-clic envoyé à ({x}, {y})."
+    if confirm is not None and not confirm("Double-clic sur la position actuelle ?"):
+        return "Refusé par l'utilisateur."
+    pg = _require_pyautogui(); pg.doubleClick()
+    return "Double-clic sur la position actuelle."
+
+
+def mouse_scroll(amount: int) -> str:
+    pg = _require_pyautogui(); pg.scroll(int(amount))
+    return f"Scroll de {amount} pas envoyé."
+
+
+def keyboard_write(text: str, confirm=None) -> str:
+    if confirm is not None and not confirm(f"Taper le texte suivant dans l'application active ?\n\n{text[:200]}"):
+        return "Refusé par l'utilisateur."
+    pg = _require_pyautogui(); pg.write(text)
+    return "Texte tapé dans l'application active."
+
+
+def keyboard_hotkey(keys: str, confirm=None) -> str:
+    if confirm is not None and not confirm(f"Appuyer la combinaison {keys} ?"):
+        return "Refusé par l'utilisateur."
+    pg = _require_pyautogui(); pg.hotkey(*[part.strip() for part in keys.split(",") if part.strip()])
+    return f"Combinaison {keys} envoyée."
+
+
+def get_screen_size() -> str:
+    pg = _require_pyautogui(); w, h = pg.size(); return f"Résolution écran : {w}x{h}."
+
+
+def capture_screen(name: str = "polaris_capture", confirm=None) -> str:
+    if confirm is not None and not confirm("Prendre une capture d'écran du bureau ?"):
+        return "Refusé par l'utilisateur."
+    pg = _require_pyautogui();
+    target_dir = DEFAULT_FOLDERS.get("downloads", HOME / "Downloads")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = (name or "polaris_capture").strip() or "polaris_capture"
+    file_path = target_dir / f"{safe_name}_{datetime.now():%Y%m%d_%H%M%S}.png"
+    pg.screenshot(str(file_path))
+    return f"Capture enregistrée : {file_path}."
+
+
+def list_devices() -> str:
+    # Version réaliste et prudente : on ne prétend pas contrôler des appareils sans interface compatible.
+    info = [
+        "Bluetooth = détection passive si un adaptateur bluetooth est présent.",
+        "Wi‑Fi / réseau local = détection des hôtes visibles après autorisation réseau.",
+        "Chromecast / DLNA / UPnP = exposition possible uniquement si le service est activé dans le réseau local.",
+        "Miracast = disponible seulement si le système d'exploitation et le périphérique le supportent.",
+        "Aucun appareil n'est affirmé comme contrôlé sans interface de commande compatible.",
+    ]
+    return "\n".join(info)
+
+
 # --- fenêtres (ctypes, sans dépendance) ---
 def _windows():
     user32 = ctypes.windll.user32
     found = []
 
-    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
     def cb(hwnd, _):
         if user32.IsWindowVisible(hwnd):
             n = user32.GetWindowTextLengthW(hwnd)
             if n > 0:
                 buf = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, buf, n + 1)
-                if buf.value not in ("Program Manager", "Settings") and buf.value.strip():
-                    found.append((hwnd, buf.value))
+                text = buf.value.strip()
+                if text not in ("Program Manager", "Settings") and text:
+                    found.append((hwnd, text))
         return True
 
     user32.EnumWindows(cb, 0)
@@ -178,7 +326,7 @@ def window_action(title: str, action: str, confirm) -> str:
     if action == "close":
         if not confirm(f"Je vais fermer la fenêtre « {full} ». Les modifications non enregistrées peuvent être perdues. Tu confirmes ?"):
             return "Refusé par l'utilisateur : rien n'a été fermé."
-        user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE : fermeture douce, l'appli peut demander d'enregistrer
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)
         return f"Demande de fermeture envoyée à « {full} »."
     codes = {"minimize": 6, "maximize": 3, "restore": 9, "focus": 9}
     if action not in codes:
@@ -254,7 +402,7 @@ def rename_file(path: str, new_name: str, confirm) -> str:
     p = _check_path(path)
     if not p:
         return "Fichier introuvable ou hors des dossiers autorisés."
-    if any(c in new_name for c in '\\/:*?"<>|'):
+    if any(c in new_name for c in '\\/:*?\"<>|'):
         return "Nom invalide."
     dest = p.with_name(new_name)
     if dest.exists():

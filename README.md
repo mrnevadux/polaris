@@ -1,33 +1,31 @@
-# POLARIS — assistant vocal IA pour Windows 11
+# POLARIS — assistant IA pour Windows
 
-Dis « Hey Polaris » : il t'écoute (détection locale), réfléchit avec Gemini, agit sur ton PC et te répond à voix haute.
+POLARIS est un assistant informatique autonome, pensé comme un agent du système, pas comme un simple chatbot.
 
-## Obtenir Polaris.exe
+## Ce que la version actuelle comprend
 
-La compilation est automatique avec GitHub Actions : chaque push sur `main` lance **Build Polaris Windows (Polaris.exe)**.
+- Assistant vocal local (détection du mot de réveil avec Vosk)
+- Interface graphique futuriste personnelle
+- Gestion de fichiers locale dans les dossiers autorisés
+- Ouverture d'applications et d'URL
+- Recherche de fichiers et lecture de PDF / texte
+- Contrôle minimal de fenêtres Windows
+- Messages de confirmation avant les actions sensibles
+- Prise de capture d'écran
+- Contrôle souris / clavier / scroll via `pyautogui`
+- Résolution écran et détection des dispositifs réseau compatibles
 
-1. Ouvre l'onglet **Actions** du dépôt et sélectionne **Build Polaris Windows (Polaris.exe)**.
-2. Ouvre la dernière exécution terminée avec succès.
-3. En bas de la page, télécharge l'artifact **Polaris-Windows** et dézippe-le.
-4. Lance `Polaris/Polaris.exe`.
+## Limites honnêtes
 
-L'archive contient l'application portable et le modèle vocal français. Windows SmartScreen peut avertir car l'exe n'est pas signé : vérifie que l'archive vient bien de ce dépôt avant de choisir « Exécuter quand même ». Ne désactive pas Defender.
+Les protocoles de télécommande avancée tels que Chromecast, Miracast, DLNA, TV connectées, imprimantes, domotique, NAS et appareils IoT demandent des intégrations spécifiques, des pilotes ou des appareils compatibles. POLARIS peut détecter et préparer cette utilisation, mais il ne peut pas affirmer un contrôle complet sans interface de commande compatible sur l'appareil.
 
-## Première utilisation
+## Sécurité
 
-1. Ouvre **Réglages** et colle une clé API Gemini obtenue sur https://aistudio.google.com/apikey.
-2. Enregistre, puis écris une commande ou active le micro et dis « Hey Polaris, ouvre le Bloc-notes ».
-3. Le bouton **ARRÊT MICRO** coupe immédiatement le micro.
+- Aucune suppression directe non confirmée.
+- Aucun outil de shell libre.
+- Les actions à risque demandent une confirmation explicite.
+- Les clés API sont protégées et stockées localement.
 
-La clé API est chiffrée avec Windows DPAPI. Les données sont stockées dans `data` à côté de l'exe si le dossier est inscriptible ; sinon, elles sont placées dans `%LOCALAPPDATA%/Polaris/data` pour éviter que les réglages échouent dans un dossier protégé.
+## Build EXE
 
-## Fonctions
-
-Ouvrir des logiciels et des sites, rechercher des fichiers dans les dossiers utilisateur, lire et résumer des documents, renommer/déplacer des fichiers avec confirmation, gérer des fenêtres, répondre aux questions et rédiger. Le mode économie ralentit les animations et mesures.
-
-## Sécurité et limites
-
-- Le mot de réveil est détecté localement (Vosk) ; aucun son n'est enregistré ni envoyé. Seul le texte de la commande part vers Gemini.
-- Gemini n'a accès qu'aux outils contrôlés de `polaris/tools.py` : pas de commande libre et aucune suppression de fichier.
-- Confirmation avant les actions sensibles. Aucun démarrage automatique ni modification du registre.
-- Sans internet, seules certaines commandes locales de base fonctionnent.
+Le workflow GitHub Actions compile l'application en `Polaris.exe` avec PyInstaller. Le dossier `data` est créé à côté de l'exe, ou dans `%LOCALAPPDATA%/Polaris/data` si le dossier d'exécution est protégé.
