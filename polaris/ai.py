@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-from . import config, tools
+from . import config, tools, web
 
 MAX_STEPS = 8
 
@@ -38,35 +38,42 @@ def _call(api_key: str, model: str, body: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise GeminiError(_friendly(e.code, e.read().decode("utf-8", "ignore")))
+        with urllib.request.urlopen(req, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise GeminiError(_friendly(exc.code, exc.read().decode("utf-8", "ignore")))
     except (urllib.error.URLError, TimeoutError, OSError):
-        raise GeminiError("Pas de connexion à Gemini. Les commandes locales (ouvrir une appli, chercher un fichier) restent possibles.")
+        raise GeminiError("Pas de connexion à Gemini. Les commandes locales et la recherche Web restent possibles.")
 
 
 def _system() -> str:
     now = datetime.now().strftime("%A %d %B %Y, %H:%M")
-    return f"""Tu es POLARIS, un assistant vocal personnel inspiré de JARVIS, sur le PC Windows 11 de l'utilisateur. Nous sommes le {now}.
-Tu parles français, de façon brève et naturelle. Tes réponses sont lues à voix haute : pas de markdown, pas de listes, pas d'URL longues.
-Tu peux agir sur le PC UNIQUEMENT avec les outils fournis. Règles strictes :
-- N'affirme JAMAIS qu'une action a réussi si le résultat de l'outil dit le contraire ou si tu ne peux pas le vérifier. Dis honnêtement ce qui a échoué.
-- Les actions risquées (fermer une fenêtre, renommer, déplacer) demandent une confirmation gérée par les outils. Tu ne peux rien supprimer.
-- Pour la culture générale, les explications, la rédaction, la programmation : réponds directement sans outil.
-- Pour résumer un document : find_files, puis read_file, puis résume."""
+    return f"""Tu es POLARIS, un assistant informatique personnel sur Windows. Nous sommes le {now}.
+Tu parles français, de façon claire, et tu ne prétends jamais qu'une action a réussi sans résultat vérifiable.
+Pour le Web public, tu peux réellement rechercher puis lire des pages avec web_search et read_webpage. Pour une question d'actualité ou une demande de recherche, utilise les résultats et cite les URL consultées. Si une page bloque l'accès, explique-le honnêtement.
+Les outils Web ne se connectent pas à des comptes, ne soumettent pas de formulaires et ne réalisent pas d'achats. N'affirme pas avoir effectué ces actions.
+Tu peux agir sur le PC UNIQUEMENT avec les outils fournis. Les actions risquées demandent confirmation. Pas de commande shell libre et pas de suppression de fichiers.
+Pour résumer un document local : find_files, puis read_file, puis résume."""
 
 
 class Agent:
     def __init__(self, confirm, on_action, on_status):
-        self.confirm = confirm          # confirm(question) -> bool
-        self.on_action = on_action      # on_action(texte) pour l'interface
-        self.on_status = on_status      # on_status(True/False, message)
+        self.confirm = confirm
+        self.on_action = on_action
+        self.on_status = on_status
         self.history: list[dict] = []
 
     def _offline(self, text: str) -> str:
-        """Commandes locales de base quand Gemini est injoignable (« ouvre … », « cherche … sur internet »)."""
+        """Quelques commandes locales et de recherche publique sans Gemini."""
         t = text.lower().strip().rstrip(".!?")
+        web_match = re.match(r"^(?:cherche|recherche|trouve)\s+(.+?)\s+(?:sur internet|sur le web|en ligne)$", t)
+        if web_match:
+            query = web_match.group(1).strip()
+            config.log_action(f"offline web_search {query}")
+            return web.execute("web_search", {"query": query})
+        if t.startswith(("cherche sur internet ", "recherche sur internet ", "cherche sur le web ", "recherche sur le web ")):
+            query = re.sub(r"^(?:cherche|recherche)\s+sur\s+(?:internet|le web)\s+", "", t).strip()
+            return web.execute("web_search", {"query": query})
         m = re.match(r"^(?:ouvre|ouvrir|lance|lancer)\s+(?:le |la |l'|les |l’)?(.+)$", t)
         if m:
             config.log_action(f"offline open_app {m.group(1)}")
@@ -81,46 +88,48 @@ class Agent:
         key = config.get_api_key()
         if not key:
             self.on_status(False, "clé manquante")
-            return "Il me faut ta clé API Gemini. Ouvre les réglages de Polaris pour l'ajouter."
+            local = self._offline(text)
+            return local or "Il me faut ta clé API Gemini pour l'assistant IA. La recherche Web simple fonctionne aussi avec « cherche … sur internet »."
         model = config.get("model", config.DEFAULT_MODEL)
         contents = list(self.history) + [{"role": "user", "parts": [{"text": text}]}]
+        declarations = tools.DECLARATIONS + web.DECLARATIONS
         for _ in range(MAX_STEPS):
             body = {
                 "systemInstruction": {"parts": [{"text": _system()}]},
                 "contents": contents,
-                "tools": [{"functionDeclarations": tools.DECLARATIONS}],
+                "tools": [{"functionDeclarations": declarations}],
                 "generationConfig": {"temperature": 0.4},
             }
             try:
-                resp = _call(key, model, body)
-            except GeminiError as e:
+                response = _call(key, model, body)
+            except GeminiError as exc:
                 self.on_status(False, "erreur")
                 local = self._offline(text)
-                return f"{e} {local}" if local else str(e)
+                return f"{exc} {local}" if local else str(exc)
             self.on_status(True, "connecté")
-            cands = resp.get("candidates") or []
-            content = cands[0].get("content") if cands else None
+            candidates = response.get("candidates") or []
+            content = candidates[0].get("content") if candidates else None
             parts = (content or {}).get("parts")
             if not parts:
                 return "Gemini n'a pas pu répondre à cette demande."
-            calls = [p["functionCall"] for p in parts if "functionCall" in p]
+            calls = [part["functionCall"] for part in parts if "functionCall" in part]
             if not calls:
-                answer = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip() or "Je n'ai rien à ajouter."
+                answer = "".join(part.get("text", "") for part in parts if not part.get("thought")).strip() or "Je n'ai rien à ajouter."
                 self.history += [{"role": "user", "parts": [{"text": text}]}, {"role": "model", "parts": [{"text": answer}]}]
                 self.history = self.history[-16:]
                 return answer
             contents.append(content)
             results = []
-            for c in calls:
-                name, args = c["name"], c.get("args", {})
+            for call in calls:
+                name, args = call["name"], call.get("args", {})
                 self.on_action(f"→ {name} {json.dumps(args, ensure_ascii=False)[:120]}")
                 config.log_action(f"{name} {json.dumps(args, ensure_ascii=False)}")
                 try:
-                    res = tools.execute(name, args, self.confirm)
-                except Exception as e:
-                    res = f"Échec : {e}"
-                res = res[:6000]
-                config.log_action("   = " + res[:200].replace("\n", " "))
-                results.append({"functionResponse": {"name": name, "response": {"result": res}}})
+                    result = web.execute(name, args) if name in web.TOOL_NAMES else tools.execute(name, args, self.confirm)
+                except Exception as exc:
+                    result = f"Échec : {exc}"
+                result = result[:12000]
+                config.log_action("   = " + result[:200].replace("\n", " "))
+                results.append({"functionResponse": {"name": name, "response": {"result": result}}})
             contents.append({"role": "user", "parts": results})
         return "J'ai atteint ma limite d'étapes pour cette demande. Dis-moi si je dois continuer."
