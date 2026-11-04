@@ -1,0 +1,56 @@
+name: Build Polaris Windows (Polaris.exe)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Installer les dépendances
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Télécharger le modèle vocal français (Vosk, ~40 Mo)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip -OutFile model.zip
+          Expand-Archive model.zip -DestinationPath .
+          Move-Item vosk-model-small-fr-0.22 model-fr
+          Remove-Item model.zip
+
+      - name: Compiler Polaris.exe
+        shell: pwsh
+        run: >
+          pyinstaller --noconfirm --clean --name Polaris --noconsole
+          --add-data "model-fr;model-fr"
+          --collect-all vosk --collect-all customtkinter --collect-all sounddevice --collect-all _sounddevice_data
+          --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5
+          --hidden-import comtypes --hidden-import win32com --hidden-import pythoncom
+          main.py
+
+      - name: Vérifier que Polaris.exe existe
+        shell: pwsh
+        run: |
+          if (-not (Test-Path dist/Polaris/Polaris.exe)) { throw "Polaris.exe introuvable" }
+          Get-ChildItem dist/Polaris | Select-Object -First 10
+
+      - name: Créer l'archive portable
+        shell: pwsh
+        run: Compress-Archive -Path dist/Polaris -DestinationPath Polaris-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Polaris-Windows
+          path: Polaris-Windows.zip
