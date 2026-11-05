@@ -2,6 +2,7 @@
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -24,7 +25,7 @@ def _friendly(code: int, body: str) -> str:
     if code in (401, 403) or "API key" in detail:
         return "Clé API Gemini refusée. Vérifie-la dans les réglages."
     if code == 404:
-        return "Modèle Gemini introuvable. Change le nom du modèle dans les réglages."
+        return f"Modèle Gemini introuvable ou indisponible pour cette clé : {detail}"
     if code >= 500:
         return "Gemini est temporairement indisponible. Réessaie dans un instant."
     return f"Erreur Gemini ({code}) : {detail}"
@@ -44,6 +45,37 @@ def _call(api_key: str, model: str, body: dict) -> dict:
         raise GeminiError(_friendly(exc.code, exc.read().decode("utf-8", "ignore")))
     except (urllib.error.URLError, TimeoutError, OSError):
         raise GeminiError("Pas de connexion à Gemini. Les commandes locales et la recherche Web restent possibles.")
+
+
+def _list_generate_content_models(api_key: str) -> list[str]:
+    """Return models actually enabled for this API key and supporting generateContent."""
+    models = []
+    page_token = ""
+    while True:
+        url = "https://generativelanguage.googleapis.com/v1beta/models"
+        if page_token:
+            url += "?pageToken=" + urllib.parse.quote(page_token, safe="")
+        request = urllib.request.Request(url, headers={"x-goog-api-key": api_key})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError):
+            return []
+        for item in payload.get("models", []):
+            name = item.get("name", "")
+            if name.startswith("models/"):
+                name = name[len("models/"):]
+            if name and "generateContent" in item.get("supportedGenerationMethods", item.get("supportedMethods", [])):
+                models.append(name)
+        page_token = payload.get("nextPageToken", "")
+        if not page_token:
+            break
+    # Prefer a stable Flash model; otherwise use any compatible model returned for this key.
+    preferred = ("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash")
+    ordered = [name for name in preferred if name in models]
+    ordered.extend(sorted(name for name in models if name not in ordered and "gemini" in name and "preview" not in name))
+    ordered.extend(sorted(name for name in models if name not in ordered))
+    return ordered
 
 
 def _system() -> str:
@@ -101,7 +133,29 @@ class Agent:
                 "generationConfig": {"temperature": 0.4},
             }
             try:
-                response = _call(key, model, body)
+                try:
+                    response = _call(key, model, body)
+                except GeminiError as exc:
+                    # If the saved/default model is unavailable for this key, discover
+                    # eligible model IDs from Google's API and retry once per candidate.
+                    if "Modèle Gemini introuvable" not in str(exc):
+                        raise
+                    available = [candidate for candidate in _list_generate_content_models(key) if candidate != model]
+                    if not available:
+                        raise
+                    last_error = exc
+                    response = None
+                    for candidate in available:
+                        try:
+                            response = _call(key, candidate, body)
+                            model = candidate
+                            config.put("model", model)
+                            self.on_action(f"Modèle Gemini sélectionné automatiquement : {model}")
+                            break
+                        except GeminiError as retry_error:
+                            last_error = retry_error
+                    if response is None:
+                        raise last_error
             except GeminiError as exc:
                 self.on_status(False, "erreur")
                 local = self._offline(text)
