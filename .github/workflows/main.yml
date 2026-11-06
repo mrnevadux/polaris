@@ -1,4 +1,4 @@
-name: Build POLARIS APK
+name: Build POLARIS for Windows
 
 on:
   workflow_dispatch:
@@ -12,28 +12,40 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          distribution: temurin
-          java-version: '17'
+          python-version: "3.11"
+          cache: pip
 
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+      - name: Download French speech model
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip" -OutFile "$env:RUNNER_TEMP\vosk-fr.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\vosk-fr.zip" -DestinationPath "$env:RUNNER_TEMP\vosk-fr" -Force
+          Move-Item "$env:RUNNER_TEMP\vosk-fr\vosk-model-small-fr-0.22" "model-fr"
 
-      - name: Upload APK
+      - name: Check Python source
+        run: python -m compileall -q main.py polaris
+
+      - name: Build Windows executable
+        run: pyinstaller --noconfirm --clean --windowed --name Polaris --collect-all customtkinter --collect-all vosk --add-data "model-fr;model-fr" main.py
+
+      - name: Upload Windows app
         uses: actions/upload-artifact@v4
         with:
-          name: POLARIS-Android-APK
-          path: app/build/outputs/apk/debug/*.apk
+          name: Polaris-Windows
+          path: dist/Polaris/
           if-no-files-found: error
