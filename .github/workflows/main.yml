@@ -13,7 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,14 +20,14 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
           cache: pip
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pyinstaller-hooks-contrib
 
       - name: Download French speech model
         shell: pwsh
@@ -40,8 +39,36 @@ jobs:
       - name: Check Python source
         run: python -m compileall -q main.py polaris
 
-      - name: Build Windows executable
-        run: pyinstaller --noconfirm --clean --windowed --name Polaris --collect-all customtkinter --collect-all vosk --add-data "model-fr;model-fr" main.py
+      - name: Build Windows executable with Tcl/Tk
+        run: pyinstaller --noconfirm --clean --windowed --onedir --name Polaris --collect-all customtkinter --collect-all vosk --hidden-import=tkinter --add-data "model-fr;model-fr" main.py
+
+      - name: Ensure Tcl/Tk runtime files are bundled
+        shell: pwsh
+        run: |
+          $pythonRoot = python -c "import sys; print(sys.base_prefix)"
+          $tclRoot = Join-Path $pythonRoot "tcl"
+          $outputLib = Join-Path (Get-Location) "dist\Polaris\lib"
+          $tclSource = Join-Path $tclRoot "tcl8.6"
+          $tkSource = Join-Path $tclRoot "tk8.6"
+
+          if (!(Test-Path (Join-Path $tclSource "init.tcl"))) {
+            throw "Tcl init.tcl not found at $tclSource"
+          }
+          if (!(Test-Path (Join-Path $tkSource "tk.tcl"))) {
+            throw "Tk tk.tcl not found at $tkSource"
+          }
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $outputLib "tcl8.6") | Out-Null
+          New-Item -ItemType Directory -Force -Path (Join-Path $outputLib "tk8.6") | Out-Null
+          Copy-Item (Join-Path $tclSource "*") (Join-Path $outputLib "tcl8.6") -Recurse -Force
+          Copy-Item (Join-Path $tkSource "*") (Join-Path $outputLib "tk8.6") -Recurse -Force
+
+          if (!(Test-Path (Join-Path $outputLib "tcl8.6\init.tcl"))) {
+            throw "Bundled Tcl init.tcl is missing"
+          }
+          if (!(Test-Path (Join-Path $outputLib "tk8.6\tk.tcl"))) {
+            throw "Bundled Tk tk.tcl is missing"
+          }
 
       - name: Upload Windows app
         uses: actions/upload-artifact@v4
